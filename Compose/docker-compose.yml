@@ -1,0 +1,44 @@
+services:
+  discord-music-bot:
+    build:
+      context: ..
+      dockerfile: Compose/Dockerfile
+    image: "${IMAGE_REGISTRY:-}${IMAGE_NAME:-discordmusicbot}:${IMAGE_TAG:-local}"
+    environment:
+      # Discord Bot Token
+      DISCORD_TOKEN: "${DISCORD_TOKEN}"
+      # YouTube Data API v3 Key
+      YOUTUBE_API_KEY: "${YOUTUBE_API_KEY}"
+      # Yandex Music API Token (опционально)
+      YANDEX_MUSIC_TOKEN: "${YANDEX_MUSIC_TOKEN:-}"
+      # Можно задать одной строкой (приоритетнее):
+      # DATABASE_URL: "Host=...;Port=5432;Database=...;Username=...;Password=..."
+      DATABASE_URL: "${DATABASE_URL:-}"
+      # Или параметрами (удобно для docker-compose)
+      POSTGRES_HOST: "${POSTGRES_HOST:-postgres}"
+      POSTGRES_PORT: "${POSTGRES_PORT:-5432}"
+      POSTGRES_DB: "${POSTGRES_DB:-discordmusicbot}"
+      POSTGRES_USER: "${POSTGRES_USER:-discordmusicbot}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:-discordmusicbot}"
+      POSTGRES_SSLMODE: "${POSTGRES_SSLMODE:-Disable}"
+    depends_on:
+      - postgres
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: "${POSTGRES_DB:-discordmusicbot}"
+      POSTGRES_USER: "${POSTGRES_USER:-discordmusicbot}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:-discordmusicbot}"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  pgdata:

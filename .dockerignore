@@ -1,0 +1,13 @@
+.git
+.vs
+
+**/bin/
+**/obj/
+
+Compose/.env
+Compose/dist/
+Compose/*.tar
+
+*.user
+*.suo
+*.userosscache
