@@ -22,6 +22,22 @@ public sealed class LikesService
 
     public bool IsEnabled => _dbFactory != null;
 
+    public async Task<int> GetLikesCountAsync(ulong guildId, ulong userId)
+    {
+        if (_dbFactory == null)
+        {
+            return 0;
+        }
+
+        await using var db = _dbFactory.CreateDbContext();
+        var gid = Snowflake.ToLong(guildId);
+        var uid = Snowflake.ToLong(userId);
+
+        return await db.TrackLikes.AsNoTracking()
+            .Where(x => x.GuildId == gid && x.UserId == uid)
+            .CountAsync();
+    }
+
     public async Task<(bool Success, string Message)> LikeAsync(ulong guildId, ulong userId, TrackState track)
     {
         if (_dbFactory == null)
@@ -112,6 +128,38 @@ public sealed class LikesService
             .ToListAsync();
 
         return items;
+    }
+
+    public async Task<TrackLikeDto?> GetLikeByIndexAsync(ulong guildId, ulong userId, int index)
+    {
+        if (_dbFactory == null)
+        {
+            return null;
+        }
+
+        if (index <= 0)
+        {
+            return null;
+        }
+
+        await using var db = _dbFactory.CreateDbContext();
+        var gid = Snowflake.ToLong(guildId);
+        var uid = Snowflake.ToLong(userId);
+
+        return await db.TrackLikes.AsNoTracking()
+            .Where(x => x.GuildId == gid && x.UserId == uid)
+            .OrderByDescending(x => x.AddedAt)
+            .Skip(index - 1)
+            .Take(1)
+            .Select(x => new TrackLikeDto(
+                x.Id,
+                x.TrackUrl,
+                x.Title,
+                x.Author,
+                x.SourceName,
+                TimeSpan.FromMilliseconds(x.DurationMs),
+                x.AddedAt))
+            .SingleOrDefaultAsync();
     }
 
     public async Task<TrackLikeDto?> GetLikeAsync(ulong guildId, ulong userId, long likeId)

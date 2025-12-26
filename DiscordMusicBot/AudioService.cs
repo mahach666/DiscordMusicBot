@@ -569,6 +569,25 @@ public class AudioService
 
         if (!_queues.TryGetValue(guild.Id, out var queue) || queue.Count == 0)
         {
+            // В режиме лайков "next" должен работать даже без очереди
+            if (_likedShuffle.ContainsKey(guild.Id))
+            {
+                if (_currentTracks.TryGetValue(guild.Id, out var currentLiked))
+                {
+                    _history.GetOrAdd(guild.Id, _ => new LimitedStack<TrackState>(25)).Push(currentLiked);
+                }
+
+                var started = await TryAutoPlayLikedAsync(guild.Id);
+                if (started && TryGetCurrentTrackState(guild.Id, out var likedNow))
+                {
+                    await textChannel.SendMessageAsync($"Следующий лайк: **{likedNow.Display.Title}**");
+                    return;
+                }
+
+                await textChannel.SendMessageAsync("Не удалось включить следующий лайк (возможно, нет доступных лайков).");
+                return;
+            }
+
             await textChannel.SendMessageAsync("Очередь пуста.");
             return;
         }
@@ -1081,6 +1100,22 @@ public class AudioService
 
         if (!_queues.TryGetValue(guildId, out var queue) || queue.Count == 0)
         {
+            if (_likedShuffle.ContainsKey(guildId))
+            {
+                if (_currentTracks.TryGetValue(guildId, out var currentLiked))
+                {
+                    _history.GetOrAdd(guildId, _ => new LimitedStack<TrackState>(25)).Push(currentLiked);
+                }
+
+                var started = await TryAutoPlayLikedAsync(guildId);
+                if (started && TryGetCurrentTrackState(guildId, out var likedNow))
+                {
+                    return new PlayerActionResult(true, $"Следующий лайк: **{likedNow.Display.Title}**");
+                }
+
+                return new PlayerActionResult(false, "Не удалось включить следующий лайк.");
+            }
+
             return new PlayerActionResult(false, "Очередь пуста.");
         }
 

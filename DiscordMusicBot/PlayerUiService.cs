@@ -12,16 +12,18 @@ public sealed class PlayerUiService
 
     private readonly DiscordSocketClient _client;
     private readonly AudioService _audioService;
+    private readonly LikesService _likesService;
     private readonly LavaNode _lavaNode;
     private readonly ConcurrentDictionary<ulong, PlayerMessageRef> _playerMessages = new();
     private readonly ConcurrentDictionary<ulong, SemaphoreSlim> _updateLocks = new();
     private readonly ConcurrentDictionary<ulong, string?> _lastTrackHashes = new();
     private readonly ConcurrentDictionary<ulong, CancellationTokenSource> _trackChangeBumpTokens = new();
 
-    public PlayerUiService(DiscordSocketClient client, AudioService audioService, LavaNode lavaNode)
+    public PlayerUiService(DiscordSocketClient client, AudioService audioService, LikesService likesService, LavaNode lavaNode)
     {
         _client = client;
         _audioService = audioService;
+        _likesService = likesService;
         _lavaNode = lavaNode;
 
         _audioService.PlayerStateChanged += UpdatePlayerMessageAsync;
@@ -91,6 +93,12 @@ public sealed class PlayerUiService
         if (customId.StartsWith("likes_like:", StringComparison.OrdinalIgnoreCase))
         {
             await HandleLikesLikeAsync(component);
+            return;
+        }
+
+        if (customId.StartsWith("likes_page:", StringComparison.OrdinalIgnoreCase))
+        {
+            await HandleLikesPageAsync(component);
             return;
         }
 
@@ -166,6 +174,132 @@ public sealed class PlayerUiService
         {
             await component.FollowupAsync(result.Message, ephemeral: true);
         }
+    }
+
+    public async Task<(Embed embed, MessageComponent components)> BuildLikesMessageAsync(ulong guildId, ulong userId, int page)
+    {
+        if (!_likesService.IsEnabled)
+        {
+            var disabledEmbed = new EmbedBuilder()
+                .WithTitle("❤️ Ваши лайки")
+                .WithColor(Color.DarkGrey)
+                .WithDescription("База данных не настроена. Лайки недоступны без Postgres.")
+                .Build();
+            return (disabledEmbed, new ComponentBuilder().Build());
+        }
+
+        const int pageSize = 10;
+        var totalCount = await _likesService.GetLikesCountAsync(guildId, userId);
+        if (totalCount <= 0)
+        {
+            var emptyEmbed = new EmbedBuilder()
+                .WithTitle("❤️ Ваши лайки")
+                .WithColor(Color.Gold)
+                .WithDescription("У вас пока нет лайков. Поставьте лайк текущему треку: `!like`")
+                .Build();
+            return (emptyEmbed, new ComponentBuilder().Build());
+        }
+
+        var totalPages = Math.Max(1, (int)Math.Ceiling(totalCount / (double)pageSize));
+        page = Math.Clamp(page, 1, totalPages);
+        var offset = (page - 1) * pageSize;
+
+        var likes = await _likesService.GetLikesAsync(guildId, userId, limit: pageSize, offset: offset);
+
+        var embedBuilder = new EmbedBuilder()
+            .WithTitle("❤️ Ваши лайки")
+            .WithColor(Color.Gold);
+
+        var likedShuffleOn = _audioService.TryGetLikedShuffleUserId(guildId, out var shuffleUserId) && shuffleUserId == userId;
+        var header = likedShuffleOn
+            ? "Режим лайков: **включен** (`!likes stop`)"
+            : "Режим лайков: **выключен** (`!likes shuffle`)";
+
+        static string Truncate(string value, int max)
+        {
+            if (string.IsNullOrEmpty(value))
+            {
+                return string.Empty;
+            }
+
+            return value.Length <= max ? value : value[..Math.Max(0, max - 1)] + "…";
+        }
+
+        var descriptionLines = new List<string>
+        {
+            header,
+            $"Страница: **{page}/{totalPages}** • Всего: **{totalCount}**",
+            "Используй кнопки `◀/▶` для листания, или `!likes <номер>` чтобы включить трек по номеру.",
+            string.Empty
+        };
+
+        for (var i = 0; i < likes.Count; i++)
+        {
+            var like = likes[i];
+            var duration = like.Duration.ToString(@"mm\:ss");
+            var title = string.IsNullOrWhiteSpace(like.Title) ? like.TrackUrl : like.Title;
+            title = Truncate(title, 90);
+            var author = Truncate(like.Author ?? string.Empty, 40);
+            var index = offset + i + 1;
+            descriptionLines.Add($"**{index}.** [{title}]({like.TrackUrl})\n└ {author} • {duration}");
+            descriptionLines.Add(string.Empty);
+        }
+
+        // safety: keep embed description well under 4096
+        var description = string.Join("\n", descriptionLines);
+        if (description.Length > 3900)
+        {
+            description = description[..3900] + "\n…";
+        }
+
+        embedBuilder.WithDescription(description);
+
+        var components = new ComponentBuilder()
+            .WithButton("◀", $"likes_page:{guildId}:{userId}:{page - 1}", ButtonStyle.Secondary, disabled: page <= 1, row: 0)
+            .WithButton("▶", $"likes_page:{guildId}:{userId}:{page + 1}", ButtonStyle.Secondary, disabled: page >= totalPages, row: 0)
+            .WithButton("Shuffle", $"likes_shuffle:{guildId}:{userId}", ButtonStyle.Success, emote: new Emoji("🔀"), row: 0)
+            .WithButton("Stop", $"likes_stop:{guildId}:{userId}", ButtonStyle.Secondary, emote: new Emoji("⏹"), row: 0);
+
+        for (var i = 0; i < likes.Count; i++)
+        {
+            var like = likes[i];
+            var row = 1 + (i / 5);
+            components.WithButton((i + 1).ToString(), $"likes_play:{guildId}:{userId}:{like.Id}", ButtonStyle.Primary, emote: new Emoji("▶"), row: row);
+        }
+
+        return (embedBuilder.Build(), components.Build());
+    }
+
+    private async Task HandleLikesPageAsync(SocketMessageComponent component)
+    {
+        var parts = component.Data.CustomId.Split(':', StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length != 4
+            || !ulong.TryParse(parts[1], out var guildId)
+            || !ulong.TryParse(parts[2], out var userId)
+            || !int.TryParse(parts[3], out var page))
+        {
+            await component.RespondAsync("Неверный формат кнопки.", ephemeral: true);
+            return;
+        }
+
+        if (component.GuildId == null || component.GuildId.Value != guildId)
+        {
+            await component.RespondAsync("Эта панель не относится к этому серверу.", ephemeral: true);
+            return;
+        }
+
+        if (component.User.Id != userId)
+        {
+            await component.RespondAsync("Это не твои лайки.", ephemeral: true);
+            return;
+        }
+
+        var (embed, components) = await BuildLikesMessageAsync(guildId, userId, page);
+        await component.UpdateAsync(msg =>
+        {
+            msg.Embed = embed;
+            msg.Components = components;
+        });
     }
 
     private async Task HandleLikesShuffleAsync(SocketMessageComponent component)
@@ -514,6 +648,7 @@ public sealed class PlayerUiService
 
         var hasTrack = _audioService.TryGetCurrentTrackState(guildId, out var currentTrack);
         var isPaused = player?.IsPaused ?? false;
+        var likedShuffleOn = _audioService.TryGetLikedShuffleUserId(guildId, out _);
 
         var embed = new EmbedBuilder()
             .WithTitle("Плеер")
@@ -540,7 +675,7 @@ public sealed class PlayerUiService
         var builder = new ComponentBuilder()
             .WithButton("Назад", BuildCustomId(guildId, "prev"), ButtonStyle.Secondary, emote: new Emoji("⏮️"), disabled: historyCount == 0)
             .WithButton(isPaused ? "Продолжить" : "Пауза", BuildCustomId(guildId, "pause"), ButtonStyle.Primary, emote: new Emoji(isPaused ? "▶️" : "⏸️"), disabled: player == null || !hasTrack)
-            .WithButton("Вперёд", BuildCustomId(guildId, "next"), ButtonStyle.Secondary, emote: new Emoji("⏭️"), disabled: queueCount == 0)
+            .WithButton("Вперёд", BuildCustomId(guildId, "next"), ButtonStyle.Secondary, emote: new Emoji("⏭️"), disabled: queueCount == 0 && !likedShuffleOn)
             .WithButton("❤️", $"likes_like:{guildId}", ButtonStyle.Secondary, disabled: !hasTrack)
             .WithButton("Стоп", BuildCustomId(guildId, "stop"), ButtonStyle.Danger, emote: new Emoji("⏹️"), disabled: player == null || !hasTrack);
 

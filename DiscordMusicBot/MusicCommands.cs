@@ -179,8 +179,20 @@ public class MusicCommands : ModuleBase<SocketCommandContext>
 
         if (string.IsNullOrWhiteSpace(args))
         {
-            await ShowLikesAsync();
+            await ShowLikesAsync(page: 1);
             return;
+        }
+
+        // paging: !likes page 2 / !likes p 2
+        if (args.StartsWith("page ", StringComparison.OrdinalIgnoreCase)
+            || args.StartsWith("p ", StringComparison.OrdinalIgnoreCase))
+        {
+            var parts = args.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            if (parts.Length >= 2 && int.TryParse(parts[1], out var page))
+            {
+                await ShowLikesAsync(page: page);
+                return;
+            }
         }
 
         if (args.Equals("shuffle", StringComparison.OrdinalIgnoreCase)
@@ -220,63 +232,16 @@ public class MusicCommands : ModuleBase<SocketCommandContext>
             return;
         }
 
-        await ReplyAsync("Использование: `!likes` | `!likes shuffle` | `!likes stop` | `!likes <номер>`");
+        await ReplyAsync("Использование: `!likes` | `!likes page <страница>` | `!likes shuffle` | `!likes stop` | `!likes <номер>`");
     }
 
-    private async Task ShowLikesAsync()
+    private async Task ShowLikesAsync(int page)
     {
-        if (!_likesService.IsEnabled)
-        {
-            await ReplyAsync("База данных не настроена. Лайки недоступны без Postgres.");
-            return;
-        }
-
         var userId = Context.User.Id;
         var guildId = Context.Guild.Id;
-
-        var likes = await _likesService.GetLikesAsync(guildId, userId, limit: 10);
-        if (likes.Count == 0)
-        {
-            await ReplyAsync("У вас пока нет лайков. Поставьте лайк текущему треку: `!like`");
-            return;
-        }
-
-        var embed = new EmbedBuilder()
-            .WithTitle("❤️ Ваши лайки")
-            .WithColor(Color.Gold);
-
-        if (_audioService.TryGetLikedShuffleUserId(guildId, out var shuffleUserId) && shuffleUserId == userId)
-        {
-            embed.WithDescription("Режим лайков: **включен** (`!likes stop`)");
-        }
-        else
-        {
-            embed.WithDescription("Режим лайков: **выключен** (`!likes shuffle`)");
-        }
-
-        var lines = new List<string>();
-        for (var i = 0; i < likes.Count; i++)
-        {
-            var like = likes[i];
-            var duration = like.Duration.ToString(@"mm\:ss");
-            var title = string.IsNullOrWhiteSpace(like.Title) ? like.TrackUrl : like.Title;
-            lines.Add($"{i + 1}. [{title}]({like.TrackUrl})\n   {like.Author} • {duration}");
-        }
-
-        embed.AddField("Треки", string.Join("\n\n", lines));
-
-        var components = new ComponentBuilder()
-            .WithButton("Shuffle", $"likes_shuffle:{guildId}:{userId}", ButtonStyle.Success, emote: new Emoji("🔀"), row: 0)
-            .WithButton("Stop", $"likes_stop:{guildId}:{userId}", ButtonStyle.Secondary, emote: new Emoji("⏹"), row: 0);
-
-        for (var i = 0; i < likes.Count; i++)
-        {
-            var like = likes[i];
-            var row = 1 + (i / 5);
-            components.WithButton((i + 1).ToString(), $"likes_play:{guildId}:{userId}:{like.Id}", ButtonStyle.Primary, emote: new Emoji("▶"), row: row);
-        }
-
-        await Context.Channel.SendMessageAsync(embed: embed.Build(), components: components.Build());
+        var normalizedPage = page < 1 ? 1 : page;
+        var (embed, components) = await _playerUiService.BuildLikesMessageAsync(guildId, userId, normalizedPage);
+        await Context.Channel.SendMessageAsync(embed: embed, components: components);
     }
 
     private async Task PlayLikeByIndexAsync(int index)
@@ -306,14 +271,13 @@ public class MusicCommands : ModuleBase<SocketCommandContext>
             return;
         }
 
-        var likes = await _likesService.GetLikesAsync(Context.Guild.Id, Context.User.Id, limit: index);
-        if (likes.Count < index)
+        var like = await _likesService.GetLikeByIndexAsync(Context.Guild.Id, Context.User.Id, index);
+        if (like == null)
         {
             await ReplyAsync("Нет трека с таким номером в списке.");
             return;
         }
 
-        var like = likes[index - 1];
         var result = await _audioService.PlayLikedAsync(Context.Guild, voiceChannel, textChannel, Context.User.Id, like.Id);
         await ReplyAsync(result.Message);
     }
