@@ -74,7 +74,7 @@ dotnet run --project .\DiscordMusicBot\DiscordMusicBot.csproj -- --no-lavalink
 - `!join` / `!j` — подключиться к голосовому каналу.
 - `!leave` / `!l` — отключиться.
 - `!play <запрос|URL>` / `!p` — добавить трек/плейлист в очередь или запустить.
-- `!source [auto|youtube|ytmusic|soundcloud|yandexmusic]` — показать/установить приоритет источника поиска (сохраняется в Postgres, если он настроен).
+- `!source` / `!src` — показать/установить приоритет источника поиска (сохраняется в Postgres, если он настроен). Значения: `auto`, `youtube`, `ytmusic`, `soundcloud`, `yandexmusic`.
 - `!queue` / `!q` — очередь (с кнопками выбора).
 - `!skip` / `!next` / `!n` — пропуск.
 - `!pause` / `!resume` — пауза/продолжить.

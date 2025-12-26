@@ -235,6 +235,34 @@ public class MusicCommands : ModuleBase<SocketCommandContext>
         await ReplyAsync("Использование: `!likes` | `!likes page <страница>` | `!likes shuffle` | `!likes stop` | `!likes <номер>`");
     }
 
+    [Command("lshuffle")]
+    [Alias("lsh", "lshuf")]
+    [Summary("Включить случайное воспроизведение лайков (сокращение для !likes shuffle)")]
+    public async Task LikesShuffleAsync()
+    {
+        if (Context.Guild == null)
+        {
+            await ReplyAsync("Команда доступна только на сервере.");
+            return;
+        }
+
+        var voiceChannel = (Context.User as IGuildUser)?.VoiceChannel;
+        if (voiceChannel == null)
+        {
+            await ReplyAsync("Вы должны быть в голосовом канале!");
+            return;
+        }
+
+        if (Context.Channel is not ITextChannel textChannel)
+        {
+            await ReplyAsync("Эта команда доступна только в текстовом канале сервера.");
+            return;
+        }
+
+        var result = await _audioService.StartLikedShuffleAsync(Context.Guild, voiceChannel, textChannel, Context.User.Id);
+        await ReplyAsync(result.Message);
+    }
+
     private async Task ShowLikesAsync(int page)
     {
         var userId = Context.User.Id;
@@ -414,13 +442,13 @@ public class MusicCommands : ModuleBase<SocketCommandContext>
                 "`!stop` - остановить и очистить очередь\n" +
                 "`!volume <0-100>` или `!vol` - установить громкость")
             .AddField("🔎 Источник поиска:",
-                "`!source` - показать текущий источник\n" +
+                "`!source` или `!src` - показать текущий источник\n" +
                 "`!source auto|youtube|ytmusic|soundcloud|yandexmusic` - установить приоритетный сервис")
             .AddField("❤️ Лайки:",
                 "`!like` - добавить текущий трек в лайки\n" +
                 "`!unlike` - удалить текущий трек из лайков\n" +
                 "`!likes` - показать лайки (с кнопками)\n" +
-                "`!likes shuffle` - включить случайное проигрывание лайков\n" +
+                "`!likes shuffle` или `!lshuffle` или `!lsh` - включить случайное проигрывание лайков\n" +
                 "`!likes stop` - выключить режим лайков")
             .AddField("📊 Информация:",
                 "`!queue` или `!q` - показать очередь с кнопками выбора трека\n" +
